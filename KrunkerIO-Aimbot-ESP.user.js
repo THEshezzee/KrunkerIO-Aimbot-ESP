@@ -23,12 +23,12 @@ removeQueries();
 const defaultSettings = {
 	aimbotEnabled: true,
 	aimbotOnRightMouse: false,
-	aimbotWallCheck: true,
+	aimbotWallCheck: true, 
 	espEnabled: true,
 	espLines: true,
 	wireframe: false,
 	fovSort: false,
-	fovAngle: 60
+	fovAngle: 60 
 };
 const settings = Object.assign({}, defaultSettings);
 try {
@@ -55,7 +55,11 @@ const gui = createGUI();
 
 let scene;
 let rightMouseDown = false;
-let targetPlayer = null;
+let targetPlayer = null; 
+let intersectableObjects = []; 
+let visibilityCache = new Map(); 
+let lastVisibilityCheck = 0; 
+const VISIBILITY_CHECK_INTERVAL = 100; 
 
 const x = {
 	window: window,
@@ -83,24 +87,49 @@ const proxied = function (object) {
 			object.parent.name === 'Main') {
 			x.consoleLog('Found Scene!');
 			scene = object.parent;
+
+			updateIntersectableObjects();
 			x.ArrayPrototype.push = x.ArrayPush;
 		}
 	} catch (error) {}
 	return x.ArrayPush.apply(this, arguments);
 };
 
+function updateIntersectableObjects() {
+	if (!scene || !scene.children) return;
+	const startTime = performance.now();
+	intersectableObjects = scene.children.filter(obj => {
+		if (obj.type !== 'Mesh' || !obj.visible) return false;
+		if (obj.geometry) {
+			if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+			const size = obj.geometry.boundingBox.getSize(new THREE.Vector3());
+			return size.y > 15 && (size.x > 15 || size.z > 15); 
+		}
+		return false;
+	});
+	x.consoleLog(`Updated intersectable objects: ${intersectableObjects.length}, took ${performance.now() - startTime}ms`);
+}
+
 function isPlayerVisible(player, myPlayer, scene, THREE) {
 	if (!settings.aimbotWallCheck) {
-		return true;
+		return true; 
 	}
 
 	if (!player.children[0] || !player.children[0].children[0] || !myPlayer.children[0] || !myPlayer.children[0].children[0]) {
-		return false;
+		return false; 
 	}
 
+	const now = performance.now();
+	const playerId = player.uuid || player.id || JSON.stringify(player.position); 
+	const cached = visibilityCache.get(playerId);
+	if (cached && now - cached.timestamp < VISIBILITY_CHECK_INTERVAL) {
+		return cached.visible;
+	}
+
+	const startTime = performance.now();
 	const camera = myPlayer.children[0].children[0];
 	const targetPos = new THREE.Vector3();
-	player.children[0].children[0].getWorldPosition(targetPos);
+	player.children[0].children[0].getWorldPosition(targetPos); 
 
 	const cameraPos = new THREE.Vector3();
 	camera.getWorldPosition(cameraPos);
@@ -109,9 +138,10 @@ function isPlayerVisible(player, myPlayer, scene, THREE) {
 	const raycaster = new THREE.Raycaster();
 	raycaster.set(cameraPos, direction);
 
-	const objectsToIntersect = scene.children.filter(obj => obj.type === 'Mesh' && obj.visible && obj !== player);
+	const objectsToIntersect = intersectableObjects.filter(obj => obj.id !== player.id);
 	const intersects = raycaster.intersectObjects(objectsToIntersect, false);
 
+	let visible = true;
 	if (intersects.length > 0) {
 		const distanceToPlayer = cameraPos.distanceTo(targetPos);
 		if (intersects[0].distance < distanceToPlayer - 1) {
@@ -120,15 +150,18 @@ function isPlayerVisible(player, myPlayer, scene, THREE) {
 				if (!hitObject.geometry.boundingBox) hitObject.geometry.computeBoundingBox();
 				const size = hitObject.geometry.boundingBox.getSize(new THREE.Vector3());
 				if (size.y > 15 && (size.x > 15 || size.z > 15)) {
-					return false;
+					visible = false; 
 				}
 			} else {
-				return false;
+				visible = false; 
 			}
 		}
 	}
 
-	return true;
+	visibilityCache.set(playerId, { visible, timestamp: now });
+	x.consoleLog(`Visibility check for player ${playerId}: ${visible}, took ${performance.now() - startTime}ms`);
+
+	return visible;
 }
 
 const tempVector = new THREE.Vector3();
@@ -182,7 +215,7 @@ function drawFovCircle() {
 
 	const centerX = canvas.width / 2;
 	const centerY = canvas.height / 2;
-	const fovRadius = (settings.fovAngle / 90) * (canvas.height / 4);
+	const fovRadius = (settings.fovAngle / 90) * (canvas.height / 4); 
 
 	ctx.beginPath();
 	ctx.arc(centerX, centerY, fovRadius, 0, 2 * Math.PI);
@@ -218,6 +251,12 @@ function animate() {
 		return;
 	}
 
+	const now = performance.now();
+	if (now - lastVisibilityCheck > VISIBILITY_CHECK_INTERVAL) {
+		visibilityCache.clear(); 
+		lastVisibilityCheck = now;
+	}
+
 	const players = [];
 	let myPlayer;
 
@@ -243,7 +282,7 @@ function animate() {
 	}
 
 	let counter = 0;
-	targetPlayer = null;
+	targetPlayer = null; 
 	let minDistance = Infinity;
 	let minAngle = Infinity;
 
@@ -254,12 +293,24 @@ function animate() {
 
 	tempObject.matrix.copy(myPlayer.matrix).invert();
 
-	for (let i = 0; i < players.length; i++) {
-		const player = players[i];
-		if (!player.children[0]) continue;
+	const startTime = performance.now();
+
+	const sortedPlayers = settings.fovSort
+		? players.sort((a, b) => {
+			const aPos = new THREE.Vector3().copy(a.position).sub(myPlayer.position).normalize();
+			const bPos = new THREE.Vector3().copy(b.position).sub(myPlayer.position).normalize();
+			const angleA = cameraDirection.angleTo(aPos) * (180 / Math.PI);
+			const angleB = cameraDirection.angleTo(bPos) * (180 / Math.PI);
+			return angleA - angleB;
+		})
+		: players.sort((a, b) => myPlayer.position.distanceTo(a.position) - myPlayer.position.distanceTo(b.position));
+
+	for (let i = 0; i < sortedPlayers.length; i++) {
+		const player = sortedPlayers[i];
+		if (!player.children[0]) continue; 
 		const teamName = player.teamName || 'unknown';
 		const isAlly = teamName === myTeam && teamName !== 'unknown';
-		const teamColor = isAlly ? [0, 1, 0] : [1, 0, 0];
+		const teamColor = isAlly ? [0, 1, 0] : [1, 0, 0]; 
 
 		if (!player.box) {
 			const boxMaterial = new THREE.RawShaderMaterial({
@@ -307,23 +358,19 @@ function animate() {
 		player.visible = settings.espEnabled || player.visible;
 		player.box.visible = settings.espEnabled;
 
-		if (!isAlly && isPlayerVisible(player, myPlayer, scene, THREE)) {
+		if (!isAlly && !targetPlayer && (settings.fovSort ? i === 0 : true)) {
 			const distance = player.position.distanceTo(myPlayer.position);
-			if (settings.fovSort) {
-				tempVector2.copy(player.position).sub(myPlayer.position).normalize();
-				const angle = cameraDirection.angleTo(tempVector2) * (180 / Math.PI);
-				if (angle < settings.fovAngle && angle < minAngle) {
-					targetPlayer = player;
-					minAngle = angle;
-				}
-			} else {
-				if (distance < minDistance) {
+			const angle = settings.fovSort ? cameraDirection.angleTo(tempVector2.copy(player.position).sub(myPlayer.position).normalize()) * (180 / Math.PI) : 0;
+			if (!settings.fovSort || angle < settings.fovAngle) {
+				if (isPlayerVisible(player, myPlayer, scene, THREE)) {
 					targetPlayer = player;
 					minDistance = distance;
+					minAngle = angle;
 				}
 			}
 		}
 	}
+	x.consoleLog(`Player processing took ${performance.now() - startTime}ms`);
 
 	linePositions.needsUpdate = true;
 	lineColors.needsUpdate = true;
@@ -443,7 +490,7 @@ function handleMouse(event) {
 	if (event.button === 2) {
 		rightMouseDown = event.type === 'pointerdown';
 		if (!rightMouseDown) {
-			targetPlayer = null;
+			targetPlayer = null; 
 		}
 	}
 }
@@ -508,7 +555,7 @@ function createGUI() {
 		settingToKey[keyToSetting[key]] = key;
 	}
 
-	const guiElements = {};
+	const guiElements = {}; 
 
 	for (const prop in settings) {
 		if (prop === 'fovAngle') {
@@ -521,13 +568,13 @@ function createGUI() {
 
 			function updateValueEl() {
 				valueEl.innerText = `${settings.fovAngle}°`;
-				slider.value = settings.fovAngle;
+				slider.value = settings.fovAngle; 
 			}
 
 			slider.oninput = function () {
 				settings.fovAngle = parseInt(this.value);
 				updateValueEl();
-				drawFovCircle();
+				drawFovCircle(); 
 				saveSettings();
 			};
 
@@ -574,7 +621,7 @@ function createGUI() {
 					guiElements[prop].updateValueEl();
 				}
 				if (prop === 'fovSort' || prop === 'fovAngle') {
-					drawFovCircle();
+					drawFovCircle(); 
 				}
 				saveSettings();
 			}
