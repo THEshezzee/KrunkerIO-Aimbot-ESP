@@ -104,8 +104,6 @@ x.defineProperty = function (obj, prop, descriptor) {
                 }
                 player.playerName = obj.name;
                 if (obj.weapon && obj.weapon.icon) {
-                    player.weaponIcon = `https:
-                } else {
                     player.weaponIcon = null;
                 }
             } catch (e) {
@@ -200,7 +198,7 @@ function isPlayerVisible(player, myPlayer, scene, THREE) {
     const parts = findBodyParts(player);
     if (settings.headPriority && parts.head) {
         getPartCenter(parts.head, targetPos);
-        targetPos.y -= 2; 
+        targetPos.y -= 2;
     } else {
         player.children[0].children[0].getWorldPosition(targetPos);
     }
@@ -463,7 +461,7 @@ function animate() {
         const parts = targetPlayer.bodyParts || findBodyParts(targetPlayer);
         if (settings.headPriority && parts.head) {
             getPartCenter(parts.head, tempVector);
-            tempVector.y -= 2; 
+            tempVector.y -= 2;
         } else if (parts.body) {
             getPartCenter(parts.body, tempVector);
         } else {
