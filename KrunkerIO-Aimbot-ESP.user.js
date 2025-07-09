@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Krunker.IO Aimbot & ESP [AD FREE]
 // @namespace    http://tampermonkey.net/
-// @version      0.3.8
+// @version      0.3.9
 // @description  Locks aim to the nearest player in krunker.io with team-based targeting, optional FOV-based targeting, team-based colored ESP lines and boxes, and wall check for aimbot.
 // @author       j-bond007
 // @match        *://krunker.io/*
@@ -12,9 +12,10 @@
 // @grant        none
 // @run-at       document-start
 // @require      https://unpkg.com/three@0.150.0/build/three.min.js
-// @downloadURL https://update.greasyfork.org/scripts/432453/KrunkerIO%20Aimbot%20%20ESP.user.js
-// @updateURL https://update.greasyfork.org/scripts/432453/KrunkerIO%20Aimbot%20%20ESP.meta.js
+// @downloadURL  https://update.greasyfork.org/scripts/432453/KrunkerIO%20Aimbot%20%20ESP.user.js
+// @updateURL    https://update.greasyfork.org/scripts/432453/KrunkerIO%20Aimbot%20%20ESP.meta.js
 // ==/UserScript==
+
 const THREE = window.THREE;
 delete window.THREE;
 const shouldShowAd = false;
@@ -137,6 +138,7 @@ function updateIntersectableObjects() {
     const startTime = performance.now();
     intersectableObjects = scene.children.filter(obj => {
         if (obj.type !== 'Mesh' || !obj.visible) return false;
+        if (obj.noShoot || obj.transparent) return false; // Exclude non-collidable objects
         if (obj.geometry) {
             if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
             const size = obj.geometry.boundingBox.getSize(new THREE.Vector3());
@@ -210,21 +212,35 @@ function isPlayerVisible(player, myPlayer, scene, THREE) {
     const raycaster = new THREE.Raycaster();
     raycaster.set(cameraPos, direction);
 
-    const objectsToIntersect = intersectableObjects.filter(obj => obj.id !== player.id);
+    // Collect objects to check for intersections, excluding the player itself
+    const objectsToIntersect = scene.children.filter(obj => {
+        if (obj === player || !obj.visible || obj.type !== 'Mesh') return false;
+        if (obj.noShoot || obj.transparent || !obj.geometry) return false;
+        if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+        const size = obj.geometry.boundingBox.getSize(new THREE.Vector3());
+        return size.y > 15 && (size.x > 15 || size.z > 15);
+    });
+
+    const distanceToPlayer = cameraPos.distanceTo(targetPos);
     const intersects = raycaster.intersectObjects(objectsToIntersect, false);
 
     let visible = true;
-    if (intersects.length > 0) {
-        const distanceToPlayer = cameraPos.distanceTo(targetPos);
-        if (intersects[0].distance < distanceToPlayer - 1) {
-            const hitObject = intersects[0].object;
-            if (hitObject.geometry) {
-                if (!hitObject.geometry.boundingBox) hitObject.geometry.computeBoundingBox();
-                const size = hitObject.geometry.boundingBox.getSize(new THREE.Vector3());
-                if (size.y > 15 && (size.x > 15 || size.z > 15)) {
-                    visible = false;
-                }
-            } else {
+    if (intersects.length > 0 && intersects[0].distance < distanceToPlayer - 1) {
+        visible = false;
+    }
+
+    // Terrain check (if available in the game context)
+    const terrain = scene.terrain || (scene.children.find(child => child.isTerrain) || {}).terrain;
+    if (terrain && terrain.raycast) {
+        const terrainHit = terrain.raycast(
+            cameraPos.x, cameraPos.z, cameraPos.y,
+            1 / direction.x, -1 / direction.z, 1 / direction.y
+        );
+        if (terrainHit) {
+            const terrainDist = cameraPos.distanceTo(
+                new THREE.Vector3(terrainHit.x, -terrainHit.y, terrainHit.z)
+            );
+            if (terrainDist < distanceToPlayer - 1) {
                 visible = false;
             }
         }
